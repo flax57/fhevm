@@ -117,15 +117,62 @@ async fn tfhe_worker_cycle(
         let now = std::time::SystemTime::now();
         let the_work = query!(
             "
-            SELECT tenant_id, output_handle, dependencies, fhe_operation, is_scalar
-            FROM computations
-            WHERE is_completed = false
-            AND is_error = false
-            ORDER BY schedule_order
-            LIMIT $1
+            WITH selected_computations AS (
+              -- Get all computations from such transactions
+              ( SELECT c.tenant_id, c.output_handle, ah.handle
+                FROM computations c
+		  LEFT JOIN allowed_handles ah
+		  ON c.output_handle = ah.handle
+                WHERE c.transaction_id IN (
+                  -- Select transaction IDs with uncomputed handles
+                  -- out of the dependence buckets
+                  SELECT transaction_id FROM computations
+                  WHERE is_completed = false
+                  AND is_error = false
+                  AND dependence_chain_id IN (
+                    WITH dep_chains as (
+                      -- Find oldest uncomputed allowed handles and
+                      -- get their dependence buckets
+		      SELECT dependence_chain_id
+		      FROM computations
+		      WHERE (tenant_id, output_handle) IN (
+                      	SELECT tenant_id, handle
+                      	FROM allowed_handles
+                      	WHERE is_computed = false
+                      	ORDER BY allowed_at
+                      	LIMIT $2
+		      )
+                    )
+                    SELECT DISTINCT dependence_chain_id FROM dep_chains
+                  )
+                  ORDER BY schedule_order
+                  LIMIT $1
+                )
+              )
+	      -- For legacy reasons (or whenever no transaction ID is
+	      -- available) we need to also select unsorted
+	      -- computations
+              UNION ALL
+              ( SELECT tenant_id, output_handle, NULL
+                FROM computations 
+                WHERE is_completed = false
+		AND is_error = false
+		AND transaction_id IS NULL  
+                ORDER BY schedule_order
+                LIMIT $1
+              )
+            )
+            -- Acquire all computations from this transaction set
+            SELECT c.tenant_id, c.output_handle, c.dependencies, c.fhe_operation, c.is_scalar,
+                   sc.handle IS NOT NULL AS is_allowed, c.dependence_chain_id,
+                   COALESCE(c.transaction_id) as transaction_id, c.is_completed
+            FROM computations c, selected_computations sc
+            WHERE c.tenant_id = sc.tenant_id
+            AND c.output_handle = sc.output_handle
             FOR UPDATE SKIP LOCKED
-        ",
-            args.work_items_batch_size as i32
+            ",
+            args.work_items_batch_size as i32,
+            args.dependence_chains_per_batch as i32,
         )
         .fetch_all(trx.as_mut())
         .await?;
@@ -140,21 +187,73 @@ async fn tfhe_worker_cycle(
         // Make sure we process each tenant independently to avoid
         // setting different keys from different tenants in the worker
         // threads
-        let work_by_tenant = the_work.into_iter().into_group_map_by(|k| k.tenant_id);
+        let mut work_by_tenant = the_work.into_iter().into_group_map_by(|k| k.tenant_id);
 
         let mut s = tracer.start_with_context("populate_key_cache", &loop_ctx);
         let mut cts_to_query: BTreeSet<&[u8]> = BTreeSet::new();
         let mut tenants_to_query: BTreeSet<i32> = BTreeSet::new();
         let mut keys_to_query: BTreeSet<i32> = BTreeSet::new();
         let key_cache = tenant_key_cache.read().await;
-        for (tenant_id, work) in work_by_tenant.iter() {
+        // Clear unneeded work items
+        for (_, work) in work_by_tenant.iter_mut() {
+            let mut work_to_remove = vec![];
+            for (idx, w) in work.iter_mut().enumerate() {
+                // If this handle is already marked as complete
+                // despite being allowed, we have a discrepancy
+                // between the allowed_handles(is_computed) and
+                // computations(is_completed) - update allowed_handles
+                // to reflect this.
+                if w.is_completed && w.is_allowed.unwrap_or(false) {
+                    let mut s =
+                        tracer.start_with_context("update_allowed_handles_is_computed", &loop_ctx);
+                    s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
+                    s.set_attribute(KeyValue::new(
+                        "handle",
+                        format!("0x{}", hex::encode(&w.output_handle)),
+                    ));
+                    let _ = query!(
+                        "
+                            UPDATE allowed_handles
+                            SET is_computed = TRUE
+                            WHERE tenant_id = $1
+                            AND handle = $2
+                        ",
+                        w.tenant_id,
+                        w.output_handle
+                    )
+                    .execute(trx.as_mut())
+                    .await?;
+                    s.end();
+                    // Nothing further to do on this work item as it
+                    // is already computed and the output ciphertext
+                    // should already be in the DB, so remove it from
+                    // the work
+                    work_to_remove.push(idx);
+                    continue;
+                }
+            }
+            for idx in work_to_remove {
+                work.remove(idx);
+            }
+        }
+        for (tenant_id, work) in work_by_tenant.iter_mut() {
             let _ = tenants_to_query.insert(*tenant_id);
             if !key_cache.contains(tenant_id) {
                 let _ = keys_to_query.insert(*tenant_id);
             }
-            for w in work.iter() {
+            for w in work.iter_mut() {
                 for dh in &w.dependencies {
                     let _ = cts_to_query.insert(dh);
+                }
+                // If this operation is not part of a labelled
+                // transaction, we need to treat it as if its output
+                // is allowed (meaning that we will consider it needed
+                // and will save its output in the DB) as otherwise we
+                // cannot reasonably keep track of all needed
+                // operations within the set of computations that are
+                // not part of a transaction
+                if w.transaction_id.is_none() {
+                    w.is_allowed = Some(true);
                 }
             }
         }
@@ -276,6 +375,8 @@ async fn tfhe_worker_cycle(
                     w.output_handle.clone(),
                     w.fhe_operation.into(),
                     input_ciphertexts.clone(),
+                    w.is_allowed.unwrap_or(true),
+                    widx,
                 )?;
                 producer_indexes.insert(&w.output_handle, n.index());
                 consumer_indexes.insert(widx, n.index());
@@ -318,6 +419,7 @@ async fn tfhe_worker_cycle(
                     }
                 }
             }
+            graph.finalize();
             s_schedule.end();
 
             // Execute the DFG with the current tenant's keys
@@ -337,46 +439,50 @@ async fn tfhe_worker_cycle(
                 sched.schedule().await?;
             }
             // Extract the results from the graph
-            let mut res = graph.get_results();
+            let mut graph_results = graph.get_results();
 
-            for (idx, w) in work.iter().enumerate() {
-                // Filter out computations that could not complete
-                if uncomputable.contains_key(&idx) {
-                    // Update timestamp of uncomputable computation
-                    let mut s =
-                        tracer.start_with_context("update_unschedulable_computation", &loop_ctx);
-                    s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
-                    s.set_attribute(KeyValue::new(
-                        "handle",
-                        format!("0x{}", hex::encode(&w.output_handle)),
-                    ));
-                    let _ = query!(
-                        "
+            // Traverse uncomputable ops and update their schedule orders
+            for idx in uncomputable.keys() {
+                let mut s =
+                    tracer.start_with_context("update_unschedulable_computation", &loop_ctx);
+                s.set_attribute(KeyValue::new("tenant_id", work[*idx].tenant_id as i64));
+                s.set_attribute(KeyValue::new(
+                    "handle",
+                    format!("0x{}", hex::encode(&work[*idx].output_handle)),
+                ));
+                let _ = query!(
+                    "
                             UPDATE computations
                             SET schedule_order = CURRENT_TIMESTAMP
                             WHERE tenant_id = $1
                             AND output_handle = $2
                         ",
-                        w.tenant_id,
-                        w.output_handle
-                    )
-                    .execute(trx.as_mut())
-                    .await?;
-                    s.end();
-                    continue;
-                }
-                let r = &mut res
-                    .iter_mut()
-                    .find(|(h, _)| *h == w.output_handle)
-                    .unwrap()
-                    .1;
+                    work[*idx].tenant_id,
+                    work[*idx].output_handle
+                )
+                .execute(trx.as_mut())
+                .await?;
+                s.end();
+                continue;
+            }
+            // Traverse computations that have been scheduled and
+            // upload their results/errors
+            for result in graph_results.iter_mut() {
+                let idx = result.work_index;
+                let result = &mut result.result;
 
                 let finished_work_unit: Result<
                     _,
-                    (Box<(dyn std::error::Error + Send + Sync)>, i32, Vec<u8>),
-                > = r
+                    (Box<dyn std::error::Error + Send + Sync>, i32, Vec<u8>),
+                > = result
                     .as_mut()
-                    .map(|rok| (w, rok.0, std::mem::take(&mut rok.1)))
+                    .map(|rok| {
+                        if let Some((ct_type, ref mut ct_bytes)) = rok {
+                            (&work[idx], Some((ct_type, std::mem::take(ct_bytes))))
+                        } else {
+                            (&work[idx], None)
+                        }
+                    })
                     .map_err(|rerr| {
                         if rerr.downcast_ref::<FhevmError>().is_some() {
                             let mut swap_val = FhevmError::BadInputs;
@@ -386,8 +492,8 @@ async fn tfhe_worker_cycle(
                             );
                             (
                                 CoprocessorError::FhevmError(swap_val).into(),
-                                w.tenant_id,
-                                w.output_handle.clone(),
+                                work[idx].tenant_id,
+                                work[idx].output_handle.clone(),
                             )
                         } else {
                             (
@@ -397,34 +503,34 @@ async fn tfhe_worker_cycle(
                                         .unwrap_or(&SchedulerError::SchedulerError),
                                 )
                                 .into(),
-                                w.tenant_id,
-                                w.output_handle.clone(),
+                                work[idx].tenant_id,
+                                work[idx].output_handle.clone(),
                             )
                         }
                     });
                 match finished_work_unit {
-                    Ok((w, db_type, db_bytes)) => {
+                    Ok((w, Some((db_type, db_bytes)))) => {
                         let mut s = tracer.start_with_context("insert_ct_into_db", &loop_ctx);
                         s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
                         s.set_attribute(KeyValue::new(
                             "handle",
                             format!("0x{}", hex::encode(&w.output_handle)),
                         ));
-                        s.set_attribute(KeyValue::new("ciphertext_type", db_type as i64));
-                        let _ = query!("
-                        INSERT INTO ciphertexts(tenant_id, handle, ciphertext, ciphertext_version, ciphertext_type)
-                        VALUES($1, $2, $3, $4, $5)
-                        ON CONFLICT (tenant_id, handle, ciphertext_version) DO NOTHING
-                    ", w.tenant_id, w.output_handle, &db_bytes, current_ciphertext_version(), db_type)
-                    .execute(trx.as_mut())
-                    .await?;
-
+                        s.set_attribute(KeyValue::new("ciphertext_type", *db_type as i64));
+                        let _ = query!(
+				"
+                                INSERT INTO ciphertexts(tenant_id, handle, ciphertext, ciphertext_version, ciphertext_type)
+                                VALUES($1, $2, $3, $4, $5)
+                                ON CONFLICT (tenant_id, handle, ciphertext_version) DO NOTHING
+                                ",
+				w.tenant_id, w.output_handle, &db_bytes, current_ciphertext_version(), *db_type)
+				.execute(trx.as_mut())
+				.await?;
                         // Notify all workers that new ciphertext is inserted
                         // For now, it's only the SnS workers that are listening for these events
                         let _ = sqlx::query!("SELECT pg_notify($1, '')", EVENT_CIPHERTEXT_COMPUTED)
                             .execute(trx.as_mut())
                             .await?;
-
                         s.end();
                         let mut s = tracer.start_with_context("update_computation", &loop_ctx);
                         s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
@@ -432,7 +538,52 @@ async fn tfhe_worker_cycle(
                             "handle",
                             format!("0x{}", hex::encode(&w.output_handle)),
                         ));
-                        s.set_attribute(KeyValue::new("ciphertext_type", db_type as i64));
+                        s.set_attribute(KeyValue::new("ciphertext_type", *db_type as i64));
+                        let _ = query!(
+                            "
+                            UPDATE computations
+                            SET is_completed = true, completed_at = CURRENT_TIMESTAMP
+                            WHERE tenant_id = $1
+                            AND output_handle = $2
+                        ",
+                            w.tenant_id,
+                            w.output_handle
+                        )
+                        .execute(trx.as_mut())
+                        .await?;
+                        s.end();
+                        let mut s = tracer
+                            .start_with_context("update_allowed_handles_is_computed", &loop_ctx);
+                        s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
+                        s.set_attribute(KeyValue::new(
+                            "handle",
+                            format!("0x{}", hex::encode(&w.output_handle)),
+                        ));
+                        let _ = query!(
+                            "
+                            UPDATE allowed_handles
+                            SET is_computed = TRUE
+                            WHERE tenant_id = $1
+                            AND handle = $2
+                        ",
+                            w.tenant_id,
+                            w.output_handle
+                        )
+                        .execute(trx.as_mut())
+                        .await?;
+                        s.end();
+                        WORK_ITEMS_PROCESSED_COUNTER.inc();
+                    }
+                    Ok((w, None)) => {
+                        // Non allowed handles are still marked as
+                        // complete but we don't upload the CT
+                        let mut s =
+                            tracer.start_with_context("update_intermediate_computation", &loop_ctx);
+                        s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
+                        s.set_attribute(KeyValue::new(
+                            "handle",
+                            format!("0x{}", hex::encode(&w.output_handle)),
+                        ));
                         let _ = query!(
                             "
                             UPDATE computations

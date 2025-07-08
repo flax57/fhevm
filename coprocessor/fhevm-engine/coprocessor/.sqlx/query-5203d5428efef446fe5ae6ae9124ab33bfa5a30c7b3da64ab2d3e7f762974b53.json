@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            UPDATE allowed_handles\n                            SET is_computed = TRUE\n                            WHERE tenant_id = $1\n                            AND handle = $2\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5203d5428efef446fe5ae6ae9124ab33bfa5a30c7b3da64ab2d3e7f762974b53"
+}
