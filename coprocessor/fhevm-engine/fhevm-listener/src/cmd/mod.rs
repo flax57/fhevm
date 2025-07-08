@@ -637,8 +637,18 @@ pub async fn main(args: Args) -> anyhow::Result<()> {
                 TfheContract::TfheContractEvents::decode_log(&log.inner)
             {
                 info!(tfhe_event = ?event, "TFHE event");
+                let log = Log {
+                    inner: event,
+                    block_hash: log.block_hash,
+                    block_number: log.block_number,
+                    block_timestamp: log.block_timestamp,
+                    transaction_hash: log.transaction_hash,
+                    transaction_index: log.transaction_index,
+                    log_index: log.log_index,
+                    removed: log.removed,
+                };
                 if let Some(ref mut db) = db {
-                    let res = db.insert_tfhe_event(&event).await;
+                    let res = db.insert_tfhe_event(&log).await;
                     if let Err(err) = res {
                         block_tfhe_errors += 1;
                         error!(error = %err, "Error inserting tfhe event");
