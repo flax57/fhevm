@@ -266,33 +266,58 @@ async fn test_fhe_binary_operands_events() -> Result<(), Box<dyn std::error::Err
         let caller = "0x0000000000000000000000000000000000000000"
             .parse()
             .unwrap();
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
                 TfheContract::TrivialEncrypt {
                     caller,
                     pt: lhs_bytes,
                     toType: to_ty(op.input_types),
                     result: lhs_handle,
                 },
-            )))
-            .await?;
+            )),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+
+        listener_event_to_db.insert_tfhe_event(&log).await?;
         if !op.is_scalar {
-            listener_event_to_db
-                .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+            let log = alloy::rpc::types::Log {
+                inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
                     TfheContract::TrivialEncrypt {
                         caller,
                         pt: rhs_bytes,
                         toType: to_ty(op.input_types),
                         result: rhs_handle,
                     },
-                )))
-                .await?;
+                )),
+                block_hash: None,
+                block_number: None,
+                block_timestamp: None,
+                transaction_hash: Some(as_handle(&BigInt::from(77))),
+                transaction_index: Some(77),
+                log_index: None,
+                removed: false,
+            };
+            listener_event_to_db.insert_tfhe_event(&log).await?;
         }
         let op_event = binary_op_to_event(&op, &lhs_handle, &rhs_handle, &op.rhs, &output_handle);
         eprintln!("op_event: {:?}", &op_event);
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(op_event))
-            .await?;
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(op_event),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+        listener_event_to_db.insert_tfhe_event(&log).await?;
 
         cases.push((op, output_handle));
     }
@@ -381,22 +406,39 @@ async fn test_fhe_unary_operands_events() -> Result<(), Box<dyn std::error::Erro
         let caller = "0x0000000000000000000000000000000000000000"
             .parse()
             .unwrap();
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
                 TfheContract::TrivialEncrypt {
                     caller,
                     pt: inp_bytes,
                     toType: to_ty(op.operand_types),
                     result: input_handle,
                 },
-            )))
-            .await?;
+            )),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+
+        listener_event_to_db.insert_tfhe_event(&log).await?;
 
         let op_event = unary_op_to_event(op, &input_handle, &output_handle);
         eprintln!("op_event: {:?}", &op_event);
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(op_event))
-            .await?;
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(op_event),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+        listener_event_to_db.insert_tfhe_event(&log).await?;
         wait_until_all_ciphertexts_computed(&app).await?;
 
         let decrypt_request = vec![output_handle.to_vec()];
@@ -440,27 +482,43 @@ async fn test_fhe_if_then_else_events() -> Result<(), Box<dyn std::error::Error>
         .parse()
         .unwrap();
 
-    listener_event_to_db
-        .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+    let log = alloy::rpc::types::Log {
+        inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
             TfheContract::TrivialEncrypt {
                 caller,
                 pt: as_scalar_uint(&BigInt::from(0)),
                 toType: to_ty(fhe_bool_type),
                 result: false_handle,
             },
-        )))
-        .await?;
+        )),
+        block_hash: None,
+        block_number: None,
+        block_timestamp: None,
+        transaction_hash: Some(as_handle(&BigInt::from(77))),
+        transaction_index: Some(77),
+        log_index: None,
+        removed: false,
+    };
+    listener_event_to_db.insert_tfhe_event(&log).await?;
 
-    listener_event_to_db
-        .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+    let log = alloy::rpc::types::Log {
+        inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
             TfheContract::TrivialEncrypt {
                 caller,
                 pt: as_scalar_uint(&BigInt::from(1)),
                 toType: to_ty(fhe_bool_type),
                 result: true_handle,
             },
-        )))
-        .await?;
+        )),
+        block_hash: None,
+        block_number: None,
+        block_timestamp: None,
+        transaction_hash: Some(as_handle(&BigInt::from(77))),
+        transaction_index: Some(77),
+        log_index: None,
+        removed: false,
+    };
+    listener_event_to_db.insert_tfhe_event(&log).await?;
 
     for input_types in supported_types() {
         let left_handle = next_handle();
@@ -472,27 +530,43 @@ async fn test_fhe_if_then_else_events() -> Result<(), Box<dyn std::error::Error>
             (BigInt::from(7), BigInt::from(12))
         };
 
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
                 TfheContract::TrivialEncrypt {
                     caller,
                     pt: as_scalar_uint(&left_input),
                     toType: to_ty(*input_types),
                     result: left_handle,
                 },
-            )))
-            .await?;
+            )),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+        listener_event_to_db.insert_tfhe_event(&log).await?;
 
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
                 TfheContract::TrivialEncrypt {
                     caller,
                     pt: as_scalar_uint(&right_input),
                     toType: to_ty(*input_types),
                     result: right_handle,
                 },
-            )))
-            .await?;
+            )),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+        listener_event_to_db.insert_tfhe_event(&log).await?;
 
         for test_value in [false, true] {
             let output_handle = next_handle();
@@ -507,8 +581,8 @@ async fn test_fhe_if_then_else_events() -> Result<(), Box<dyn std::error::Error>
                 expected_result.to_string()
             };
 
-            listener_event_to_db
-                .insert_tfhe_event(&tfhe_event(TfheContractEvents::FheIfThenElse(
+            let log = alloy::rpc::types::Log {
+                inner: tfhe_event(TfheContractEvents::FheIfThenElse(
                     TfheContract::FheIfThenElse {
                         caller,
                         control: *input_handle,
@@ -516,8 +590,16 @@ async fn test_fhe_if_then_else_events() -> Result<(), Box<dyn std::error::Error>
                         ifFalse: right_handle,
                         result: output_handle,
                     },
-                )))
-                .await?;
+                )),
+                block_hash: None,
+                block_number: None,
+                block_timestamp: None,
+                transaction_hash: Some(as_handle(&BigInt::from(77))),
+                transaction_index: Some(77),
+                log_index: None,
+                removed: false,
+            };
+            listener_event_to_db.insert_tfhe_event(&log).await?;
             wait_until_all_ciphertexts_computed(&app).await?;
             let decrypt_request = vec![output_handle.to_vec()];
             let resp = decrypt_ciphertexts(&pool, 1, decrypt_request).await?;
@@ -572,25 +654,41 @@ async fn test_fhe_cast_events() -> Result<(), Box<dyn std::error::Error>> {
                 "Encrypting inputs for cast test type from:{type_from} type to:{type_to} input:{input} output:{output}",
             );
 
-            listener_event_to_db
-                .insert_tfhe_event(&tfhe_event(TfheContractEvents::TrivialEncrypt(
+            let log = alloy::rpc::types::Log {
+                inner: tfhe_event(TfheContractEvents::TrivialEncrypt(
                     TfheContract::TrivialEncrypt {
                         caller,
                         pt: as_scalar_uint(&BigInt::from(input)),
                         toType: to_ty(*type_from),
                         result: input_handle,
                     },
-                )))
-                .await?;
+                )),
+                block_hash: None,
+                block_number: None,
+                block_timestamp: None,
+                transaction_hash: Some(as_handle(&BigInt::from(77))),
+                transaction_index: Some(77),
+                log_index: None,
+                removed: false,
+            };
+            listener_event_to_db.insert_tfhe_event(&log).await?;
 
-            listener_event_to_db
-                .insert_tfhe_event(&tfhe_event(TfheContractEvents::Cast(TfheContract::Cast {
+            let log = alloy::rpc::types::Log {
+                inner: tfhe_event(TfheContractEvents::Cast(TfheContract::Cast {
                     caller,
                     ct: input_handle,
                     toType: to_ty(*type_to),
                     result: output_handle,
-                })))
-                .await?;
+                })),
+                block_hash: None,
+                block_number: None,
+                block_timestamp: None,
+                transaction_hash: Some(as_handle(&BigInt::from(77))),
+                transaction_index: Some(77),
+                log_index: None,
+                removed: false,
+            };
+            listener_event_to_db.insert_tfhe_event(&log).await?;
 
             wait_until_all_ciphertexts_computed(&app).await?;
             let decrypt_request = vec![output_handle.to_vec()];
@@ -638,33 +736,44 @@ async fn test_fhe_rand_events() -> Result<(), Box<dyn std::error::Error>> {
         let caller = "0x0000000000000000000000000000000000000000"
             .parse()
             .unwrap();
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(TfheContractEvents::FheRand(
-                TfheContract::FheRand {
-                    caller,
-                    randType: to_ty(rand_type),
-                    seed: FixedBytes::from([0u8; 16]),
-                    result: output1_handle,
-                },
-            )))
-            .await?;
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(TfheContractEvents::FheRand(TfheContract::FheRand {
+                caller,
+                randType: to_ty(rand_type),
+                seed: FixedBytes::from([0u8; 16]),
+                result: output1_handle,
+            })),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+        listener_event_to_db.insert_tfhe_event(&log).await?;
 
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(TfheContractEvents::FheRand(
-                TfheContract::FheRand {
-                    caller,
-                    randType: to_ty(rand_type),
-                    seed: FixedBytes::from([
-                        1u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
-                        0u8,
-                    ]),
-                    result: output2_handle,
-                },
-            )))
-            .await?;
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(TfheContractEvents::FheRand(TfheContract::FheRand {
+                caller,
+                randType: to_ty(rand_type),
+                seed: FixedBytes::from([
+                    1u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+                ]),
+                result: output2_handle,
+            })),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+        listener_event_to_db.insert_tfhe_event(&log).await?;
 
-        listener_event_to_db
-            .insert_tfhe_event(&tfhe_event(TfheContractEvents::FheRandBounded(
+        let log = alloy::rpc::types::Log {
+            inner: tfhe_event(TfheContractEvents::FheRandBounded(
                 TfheContract::FheRandBounded {
                     caller,
                     upperBound: as_scalar_uint(&BigInt::from(1)),
@@ -675,8 +784,16 @@ async fn test_fhe_rand_events() -> Result<(), Box<dyn std::error::Error>> {
                     ]),
                     result: output3_handle,
                 },
-            )))
-            .await?;
+            )),
+            block_hash: None,
+            block_number: None,
+            block_timestamp: None,
+            transaction_hash: Some(as_handle(&BigInt::from(77))),
+            transaction_index: Some(77),
+            log_index: None,
+            removed: false,
+        };
+        listener_event_to_db.insert_tfhe_event(&log).await?;
 
         wait_until_all_ciphertexts_computed(&app).await?;
 
