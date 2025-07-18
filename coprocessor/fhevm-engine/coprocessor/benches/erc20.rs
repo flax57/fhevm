@@ -65,14 +65,7 @@ fn main() {
     }
 
     if ecfg.benchmark_type == "THROUGHPUT" || ecfg.benchmark_type == "ALL" {
-        for num_elems in [
-            10,
-            50,
-            200,
-            500,
-            #[cfg(feature = "gpu")]
-            2000,
-        ] {
+        for num_elems in [10, 50, 200, 500] {
             group.throughput(Throughput::Elements(num_elems));
             let bench_id =
                 format!("{bench_name}::throughput::whitepaper::FHEUint64::{num_elems}_elems::{bench_optimization_target}");

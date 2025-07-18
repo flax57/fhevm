@@ -64,7 +64,7 @@ fn main() {
         });
     }
     if ecfg.benchmark_type == "THROUGHPUT" || ecfg.benchmark_type == "ALL" {
-        for num_elems in [10, 50, 200] {
+        for num_elems in [10, 50] {
             group.throughput(Throughput::Elements(num_elems));
             let bench_id =
                 format!("{bench_name}::throughput::whitepaper::FHEUint64::{num_elems}_elems::{bench_optimization_target}");
@@ -113,7 +113,7 @@ fn main() {
         });
     }
     if ecfg.benchmark_type == "THROUGHPUT" || ecfg.benchmark_type == "ALL" {
-        for num_elems in [10, 50, 200] {
+        for num_elems in [10, 50] {
             group.throughput(Throughput::Elements(num_elems));
             let bench_id =
                 format!("{bench_name}::throughput::whitepaper::FHEUint64::{num_elems}_elems::{bench_optimization_target}");
@@ -142,7 +142,7 @@ fn main() {
     if ecfg.benchmark_type == "THROUGHPUT" || ecfg.benchmark_type == "ALL" {
         let bench_name = "dex::swap_request_dep";
         let mut group = c.benchmark_group(bench_name);
-        for num_elems in [10, 50, 200] {
+        for num_elems in [10, 50] {
             group.throughput(Throughput::Elements(num_elems));
             let bench_id =
                 format!("{bench_name}::throughput::whitepaper::FHEUint64::{num_elems}_elems::{bench_optimization_target}");
@@ -171,7 +171,7 @@ fn main() {
 
         let bench_name = "dex::swap_claim_dep";
         let mut group = c.benchmark_group(bench_name);
-        for num_elems in [10, 50, 200] {
+        for num_elems in [10, 50] {
             group.throughput(Throughput::Elements(num_elems));
             let bench_id =
                 format!("{bench_name}::throughput::whitepaper::FHEUint64::{num_elems}_elems::{bench_optimization_target}");
