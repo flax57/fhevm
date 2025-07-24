@@ -772,6 +772,7 @@ describe("Decryption", function () {
         ctHandle,
       },
     ];
+    const fakeUserDecryptedShare = createBytes32();
 
     // Define utility values
     const tenDaysInSeconds = 10 * 24 * 60 * 60;
