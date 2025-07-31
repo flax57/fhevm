@@ -467,6 +467,8 @@ async fn tfhe_worker_cycle(
             }
             // Traverse computations that have been scheduled and
             // upload their results/errors
+            let mut handles_to_udate = vec![];
+            let mut intermediate_handles_to_udate = vec![];
             for result in graph_results.iter_mut() {
                 let idx = result.work_index;
                 let result = &mut result.result;
@@ -532,71 +534,13 @@ async fn tfhe_worker_cycle(
                             .execute(trx.as_mut())
                             .await?;
                         s.end();
-                        let mut s = tracer.start_with_context("update_computation", &loop_ctx);
-                        s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
-                        s.set_attribute(KeyValue::new(
-                            "handle",
-                            format!("0x{}", hex::encode(&w.output_handle)),
-                        ));
-                        s.set_attribute(KeyValue::new("ciphertext_type", *db_type as i64));
-                        let _ = query!(
-                            "
-                            UPDATE computations
-                            SET is_completed = true, completed_at = CURRENT_TIMESTAMP
-                            WHERE tenant_id = $1
-                            AND output_handle = $2
-                        ",
-                            w.tenant_id,
-                            w.output_handle
-                        )
-                        .execute(trx.as_mut())
-                        .await?;
-                        s.end();
-                        let mut s = tracer
-                            .start_with_context("update_allowed_handles_is_computed", &loop_ctx);
-                        s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
-                        s.set_attribute(KeyValue::new(
-                            "handle",
-                            format!("0x{}", hex::encode(&w.output_handle)),
-                        ));
-                        let _ = query!(
-                            "
-                            UPDATE allowed_handles
-                            SET is_computed = TRUE
-                            WHERE tenant_id = $1
-                            AND handle = $2
-                        ",
-                            w.tenant_id,
-                            w.output_handle
-                        )
-                        .execute(trx.as_mut())
-                        .await?;
-                        s.end();
+                        handles_to_udate.push(w.output_handle.clone());
                         WORK_ITEMS_PROCESSED_COUNTER.inc();
                     }
                     Ok((w, None)) => {
                         // Non allowed handles are still marked as
                         // complete but we don't upload the CT
-                        let mut s =
-                            tracer.start_with_context("update_intermediate_computation", &loop_ctx);
-                        s.set_attribute(KeyValue::new("tenant_id", w.tenant_id as i64));
-                        s.set_attribute(KeyValue::new(
-                            "handle",
-                            format!("0x{}", hex::encode(&w.output_handle)),
-                        ));
-                        let _ = query!(
-                            "
-                            UPDATE computations
-                            SET is_completed = true, completed_at = CURRENT_TIMESTAMP
-                            WHERE tenant_id = $1
-                            AND output_handle = $2
-                        ",
-                            w.tenant_id,
-                            w.output_handle
-                        )
-                        .execute(trx.as_mut())
-                        .await?;
-                        s.end();
+                        intermediate_handles_to_udate.push(w.output_handle.clone());
                         WORK_ITEMS_PROCESSED_COUNTER.inc();
                     }
                     Err((err, tenant_id, output_handle)) => {
@@ -633,6 +577,52 @@ async fn tfhe_worker_cycle(
                     }
                 }
             }
+            let mut s = tracer.start_with_context("update_computation", &loop_ctx);
+            s.set_attribute(KeyValue::new("tenant_id", *tenant_id as i64));
+            let _ = query!(
+                "
+                UPDATE computations
+                SET is_completed = true, completed_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = $1
+                AND output_handle = ANY($2::BYTEA[])
+            ",
+                *tenant_id,
+                &handles_to_udate
+            )
+            .execute(trx.as_mut())
+            .await?;
+            s.end();
+            let mut s = tracer.start_with_context("update_allowed_handles_is_computed", &loop_ctx);
+            s.set_attribute(KeyValue::new("tenant_id", *tenant_id as i64));
+            let _ = query!(
+                "
+                UPDATE allowed_handles
+                SET is_computed = TRUE
+                WHERE tenant_id = $1
+                AND handle = ANY($2::BYTEA[])
+            ",
+                *tenant_id,
+                &handles_to_udate
+            )
+            .execute(trx.as_mut())
+            .await?;
+            s.end();
+            let mut s = tracer.start_with_context("update_intermediate_computation", &loop_ctx);
+            s.set_attribute(KeyValue::new("tenant_id", *tenant_id as i64));
+            let _ = query!(
+                "
+                UPDATE computations
+                SET is_completed = true, completed_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = $1
+                AND output_handle = ANY($2::BYTEA[])
+            ",
+                *tenant_id,
+                &intermediate_handles_to_udate
+            )
+            .execute(trx.as_mut())
+            .await?;
+            s.end();
+
             s_outer.end();
         }
         s.end();
